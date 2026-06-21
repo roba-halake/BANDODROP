@@ -1,6 +1,10 @@
 const express = require('express');
-const axios = require('axios'); // Importing our outgoing dialer tool
+const axios = require('axios'); 
 const app = express();
+
+// IMPORT THE STRATEGY UTILITIES HERE
+const { SMS_TEMPLATES, calculateFlexibleAirtime } = require('./utils/notifications');
+const { sendBandoDropSms } = require('./utils/smsGateway');
 
 app.use(express.json());
 
@@ -24,60 +28,74 @@ app.post('/api/mpesa-callback', async (req, res) => {
     try {
         const mpesaNotification = req.body; 
         
-        const amountPaid = mpesaNotification.TransAmount;
-        const customerPhone = mpesaNotification.MSISDN;
-        const customerName = mpesaNotification.FirstName;
+        // Safaricom Casing Safeguards (handling potential variations)
+        const amountPaid = parseInt(mpesaNotification.TransAmount || mpesaNotification.amount);
+        const customerPhone = mpesaNotification.MSISDN || mpesaNotification.phoneNumber;
+        const customerName = mpesaNotification.FirstName || "Valued Customer";
 
         console.log(`\n🔔 [NEW PAYMENT] KSh ${amountPaid} from ${customerName} (${customerPhone})`);
 
         // Match the incoming payment against our catalog rules
-        const matchedPackage = packageCatalog[amountPaid];
+        const matchedPackage = packageCatalog[amountPaid.toString()];
+
+        let finalSmsMessage = "";
+        let wholesaleValueToDispatch = 0;
 
         if (matchedPackage) {
-            console.log(`🚀 [DISPATCH INITIATED] Processing: "${matchedPackage.description}"`);
-
-            // --- OUTGOING API CALL TO THE WHOLESALER ---
-            // We use 'await' because sending an internet request takes a few milliseconds,
-            // and we want our code to wait for the supplier's answer before proceeding.
-            const supplierUrl = 'https://api.mock-wholesaler.com/v1/dispatch';
+            console.log(`🚀 [DISPATCH INITIATED] Processing standard tier: "${matchedPackage.description}"`);
+            wholesaleValueToDispatch = matchedPackage.wholesaleAirtime;
             
-            const payload = {
-                apiKey: "MOCK_SECRET_PARTNER_KEY_10293", // Identifies our account
-                recipient: customerPhone,                // Who gets the resource
-                amount: matchedPackage.wholesaleAirtime   // Value of resource to send
-            };
-
-            console.log(`📡 Sending request to supplier API for KSh ${matchedPackage.wholesaleAirtime}...`);
-            
-            /* // NOTE: This is where the real connection happens. We comment it out for now
-            // so your local test doesn't crash trying to connect to a fake web URL.
-            
-            const response = await axios.post(supplierUrl, payload);
-            console.log(`📡 Supplier Response Status: ${response.status}`);
-            */
-
-            console.log(`🎯 [SUCCESS] KSh ${matchedPackage.wholesaleAirtime} successfully deducted from float and sent to ${customerPhone}!`);
+            // Build the standard success text
+            finalSmsMessage = SMS_TEMPLATES.SUCCESS(customerName, amountPaid, matchedPackage.description);
 
         } else {
-            console.log(`⚠️ [UNKNOWN AMOUNT] Paid KSh ${amountPaid}. No matching data tier found.`);
+            // THE ADAPTIVE STRATEGY TRIGGER: User paid an odd amount
+            wholesaleValueToDispatch = calculateFlexibleAirtime(amountPaid);
+            
+            console.log(`⚠️ [UNKNOWN AMOUNT] Paid KSh ${amountPaid}. Triggering Dynamic Value Adjuster.`);
+            console.log(`🎯 [FLEX DISPATCH] Allocated wholesale resource value: KSh ${wholesaleValueToDispatch}`);
+
+            // Build the flexible fallback text
+            finalSmsMessage = SMS_TEMPLATES.PRICE_MISMATCH(customerName, amountPaid, wholesaleValueToDispatch);
         }
+
+        // --- OUTGOING API DISPATCH ENGINE ---
+        const supplierUrl = 'https://api.mock-wholesaler.com/v1/dispatch';
+        const payload = {
+            apiKey: "MOCK_SECRET_PARTNER_KEY_10293",
+            recipient: customerPhone,
+            amount: wholesaleValueToDispatch
+        };
+
+        console.log(`📡 Sending dispatch request to supplier for KSh ${wholesaleValueToDispatch}...`);
+        
+        /* // NOTE: Un-comment this specific block once your live wholesale API endpoint is ready!
+        // It will automatically process supplier delivery and fire the real-time notification text.
+        
+        try {
+            await axios.post(supplierUrl, payload);
+            console.log(`📡 Supplier response cleared successfully.`);
+        } catch (supplierErr) {
+            console.error(`❌ Wholesale Supplier API call failed:`, supplierErr.message);
+        }
+        */
+
+        // 2. Fire the real text instantly to their device screen!
+        // This functions perfectly in both Sandbox mode or Live mode depending on your credentials.
+        await sendBandoDropSms(customerPhone, finalSmsMessage);
+
+        console.log(`🎯 [SUCCESS SYSTEM LOOP COMPLETE] Logged SMS: "${finalSmsMessage}"`);
 
         // Instantly acknowledge Safaricom's handshake
         res.status(200).json({ status: "Success", message: "Processed" });
 
     } catch (error) {
         console.error("❌ [ERROR PROCESSING CALLBACK]:", error.message);
-        // Even if our code fails inside, we return a 200 to Safaricom so they stop spamming us
         res.status(200).json({ status: "Error", message: "Internal handling issue" });
     }
 });
 
-// Server Initialization (Production Ready)
-// Process.env.PORT allows the cloud provider to dynamically inject their own port.
-// If it's not found (like when running on your laptop), it defaults to 3000.
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
     console.log(`🚀 BANDODROP BACKEND IS LIVE ON PORT ${PORT}`);
-
 });
