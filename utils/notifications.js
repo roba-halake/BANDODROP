@@ -1,25 +1,16 @@
-// utils/notifications.js
-
 const SMS_TEMPLATES = {
-    SUCCESS: (name, amountPaid, description) => 
-        `BANDODROP: Habari ${name}, KSh ${amountPaid} received! Your pack "${description}" has been credited successfully. Thank you for choosing the Drop! 🚀`,
-    
-    PRICE_MISMATCH: (name, amountPaid, calculatedAirtime) => 
-        `BANDODROP: Habari ${name}, KSh ${amountPaid} received. Because this didn't match a standard package, we've dynamically credited your line with KSh ${calculatedAirtime} of resource value!`,
-    
-    SYSTEM_DELAY: (name) => 
-        `BANDODROP: Habari ${name}, payment verified! We are experiencing a temporary carrier delay. Our system is auto-retrying. Your data value is fully secure.`
+    STANDARD: (name, amount, resource) => `BANDODROP: Habari ${name}, KSh ${amount} confirmed! Your account has been credited with ${resource} data. Keep dropping!`,
+    FLEXIBLE: (name, amountPaid, calculatedValue) => `BANDODROP: Habari ${name}, KSh ${amountPaid} received. Because this didn't match a standard package, we've dynamically credited your line with KSh ${calculatedValue} of resource value!`
 };
 
 /**
- * Dynamic Value Adjuster Math
- * If a user sends a weird amount, we maintain our safe wholesale conversion ratio.
- * Average retail-to-wholesale conversion across your catalog is ~1.15x.
+ * Calculates optimal value conversions for unmapped transaction inputs
+ * @param {number} amountPaid - Unprocessed numeric input from webhook
+ * @returns {number} Optimal wholesale purchase capacity
  */
 const calculateFlexibleAirtime = (amountPaid) => {
     const safeMultiplier = 1.15; 
-    const assignedWholesaleValue = Math.floor(amountPaid * safeMultiplier);
-    return assignedWholesaleValue;
+    return Math.floor(amountPaid * safeMultiplier);
 };
 
 module.exports = {
