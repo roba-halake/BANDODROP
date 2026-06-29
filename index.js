@@ -127,7 +127,7 @@ app.get('/admin/dashboard', async (req, res) => {
     
     res.send(htmlResponse);
 });
-const PORT = process.env.PORT || 3000;
+
 app.listen(PORT,'0.0.0.0',() => {
     console.log("🚀 BANDODROP BACKEND IS LIVE ON PORT " + PORT);
 });
