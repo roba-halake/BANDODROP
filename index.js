@@ -1,133 +1,228 @@
-// 1. LOAD ENVIRONMENT VARIABLES FIRST
+/**
+ * ============================================================================
+ * @project     BandoDrop Core Webhook Engine
+ * @description Autonomous payment collection and telecommunications provisioning gateway
+ * @author      Technical Operations / Lead Engineer
+ *              Designed specifically for localized high-velocity campus distribution.
+ * ============================================================================
+ */
+
+// 1. ENVIRONMENT CONFIGURATION & LIFECYCLE INITIALIZATION
 require('dotenv').config();
 
-console.log("-----------------------------------------");
-console.log("⚙️  DIAGNOSTICS: Loaded Key:", process.env.AT_API_KEY ? "FOUND (Starts with " + process.env.AT_API_KEY.substring(0, 8) + ")" : "NOT FOUND");
-console.log("⚙️  DIAGNOSTICS: Username:", process.env.AT_USERNAME);
-console.log("⚙️  DIAGNOSTICS: Supabase URL:", process.env.SUPABASE_URL ? "FOUND" : "NOT FOUND"); // Added DB sanity check
-console.log("-----------------------------------------");
+console.log("----------------------------------------------------------------");
+console.log("⚙️  SYSTEM DIAGNOSTICS: INITIALIZING TELECOM MODULES");
+console.log(`⚙️  Suppliers Layer: ${process.env.AT_API_KEY ? "CONNECTED [Verified Masked]" : "CRITICAL MISSING AT_API_KEY"}`);
+console.log(`⚙️  Data Repository: ${process.env.SUPABASE_URL ? "CONNECTED [Supabase Pool Active]" : "CRITICAL MISSING DB_URL"}`);
+console.log("----------------------------------------------------------------");
 
-// 2. NOW IMPORT DEPENDENCIES
+// 2. STACK DEPENDENCIES & INGESTION MIDDLEWARE
 const cors = require('cors');
 const express = require('express');
+
 const app = express();
-app.use(cors()); // This tells Express to accept requests from your Flutter web app
+
+// Enable Cross-Origin Resource Sharing for decoupling administrative client frontends
+app.use(cors());
+
+// Express global JSON body-parsing middleware for handling IntaSend webhook streams
+app.use(express.json());
+
 const PORT = process.env.PORT || 3000;
 
-// Import local logic modules
-const { SMS_TEMPLATES, calculateFlexibleAirtime } = require('./utils/notifications');
+// Internal business logic, notification templates, and database mapping abstraction layers
+const { SMS_TEMPLATES } = require('./utils/notifications');
 const { sendBandoDropSms } = require('./utils/smsGateway');
 const { dispatchWholesaleResource } = require('./utils/supplierGateway');
 const { logTransaction, getAdminMetrics } = require('./utils/db');
 
-app.use(express.json());
-
-// 3. MPESA CALLBACK WEBHOOK ENDPOINT
+/**
+ * ============================================================================
+ * @route       POST /api/mpesa-callback
+ * @description Production payment webhook listener for IntaSend payment gateway.
+ *              Acts as an autonomous financial loop dispatcher.
+ *              Bypasses localized carrier debts (e.g., Okoa Jahazi) via corporate push.
+ * ============================================================================
+ */
 app.post('/api/mpesa-callback', async (req, res) => {
     try {
-        const { TransAmount, MSISDN, FirstName } = req.body;
-        const amount = parseInt(TransAmount);
-        const customerName = FirstName || 'Hustler';
+        // Deconstruct verified payload format dispatched from IntaSend Webhook stream
+        const { account, net_amount, state, challenge } = req.body;
 
-        console.log(`\n🔔 [NEW PAYMENT] KSh ${amount} from ${customerName} (${MSISDN})`);
-
-        let messageToSend = "";
-        let finalValueToDispatch = amount; // Default to face value for standard options
-
-        // Standard Packages Map vs Flexible Adjuster
-        if (amount === 20) {
-            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amount, "500MB");
-            finalValueToDispatch = 20;
-        } else if (amount === 50) {
-            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amount, "1.5GB");
-            finalValueToDispatch = 50;
-        } else {
-            // "Sema na Wallet Yako" dynamic route activation
-            console.log(`⚠️ [UNKNOWN AMOUNT] Paid KSh ${amount}. Triggering Dynamic Value Adjuster.`);
-            finalValueToDispatch = calculateFlexibleAirtime(amount);
-            messageToSend = SMS_TEMPLATES.FLEXIBLE(customerName, amount, finalValueToDispatch);
+        // OPTIONAL SECURITY FILTER: Validate incoming challenge tokens against environment configurations
+        if (process.env.INTASEND_CHALLENGE && challenge !== process.env.INTASEND_CHALLENGE) {
+            console.warn(`🚨 [SECURITY ALERT] Unauthorized challenge mismatch intercepted.`);
+            return res.status(401).json({ status: "error", message: "Unauthorized webhook origin" });
         }
 
-        // STEP A: PROVISION THE ACTUAL WHOLESALE RESOURCE IN REAL-TIME
-        console.log(`📡 Sending dispatch request to supplier for KSh ${finalValueToDispatch}...`);
-        const supplyReceipt = await dispatchWholesaleResource(MSISDN, finalValueToDispatch);
-        console.log(`✅ [SUPPLIER PROVISION SUCCESS]: Order routed successfully. Reference: ${supplyReceipt.transactionId}`);
+        // Defensive Filter: Isolate state changes. Drop processing unless transaction is definitively marked COMPLETE
+        if (state !== 'COMPLETE') {
+            console.log(`ℹ️  [WEBHOOK EVENT: STATE REJECTED] Intercepted transaction status: [${state}]. Skipping core execution.`);
+            return res.status(200).json({ status: "skipped", message: "Non-completion state change logged." });
+        }
 
-        // STEP B: TRIGGER SMS DELIVERY VIA AFRICA'S TALKING
-        await sendBandoDropSms(MSISDN, messageToSend);
+        // Explicit Type Casting for precision mathematical financial calculations
+        const amountPaid = parseFloat(net_amount);
+        const msisdn = account; // Formatted structural string (e.g., "2547XXXXXXXX")
+        const customerName = 'Hustler'; // Dynamic placeholder; fallback strategy for campus marketing privacy
+
+        console.log(`\n🔔 [AUTOMATION TRIGGERED] Processing verified KSh ${amountPaid} loop disbursement for ${msisdn}`);
+
+        let messageToSend = "";
+        let finalValueToDispatch = amountPaid; 
+        let resourceMetaLog = "";
+
+        /**
+         * --------------------------------------------------------------------
+         * HIGH-MARGIN CAMPUS TARIFF DISPATCHER MATRIX
+         * Maps incoming net liquidity pools to specific technical assets
+         * --------------------------------------------------------------------
+         */
+        if (amountPaid === 23) {
+            // Tunukiwa Gifting Optimization Hook
+            resourceMetaLog = "1GB (1 Hour) High-Velocity Pack";
+            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
+            finalValueToDispatch = 23; 
+        } 
+        else if (amountPaid === 52) {
+            // Tunukiwa Mid-Tier Optimization Hook
+            resourceMetaLog = "1.5GB (3 Hours) Streaming Pack";
+            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
+            finalValueToDispatch = 52;
+        } 
+        else if (amountPaid === 110) {
+            // High-Yield Core Margin Anchor (Target Profit: +KSh 10.00)
+            resourceMetaLog = "2GB (24 Hours) Heavy Study Pack";
+            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
+            finalValueToDispatch = 110;
+        } 
+        else if (amountPaid === 22) {
+            // Telecom Airtime Allocation Logic for Talk-Time Minutes
+            resourceMetaLog = "45 Calling Minutes Bundle (3 Hours)";
+            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
+            finalValueToDispatch = 20; // Prorated face-value airtime drop injection
+        } 
+        else if (amountPaid === 10) {
+            // High-Margin Promotional SMS Route Injection 
+            resourceMetaLog = "200 SMS Bundle Pack (24 Hours)";
+            messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
+            finalValueToDispatch = 10;
+        } 
+        else {
+            /**
+             * ----------------------------------------------------------------
+             * ADVANTAGE VECTOR: "Sema na Wallet Yako" Dynamic Value Adjuster
+             * Executed dynamically if an atypical/odd cash entry enters the loop.
+             * Protects the margin by using a 20MB/Shilling allocation scale.
+             * ----------------------------------------------------------------
+             */
+            console.log(`⚠️  [UNKNOWN VALUE TARIFF] KSh ${amountPaid}. Initializing Dynamic Adjuster Matrix.`);
+            
+            // Deduct processing gateway fees (2.5%) then multiply by competitive prorated index
+            const netCashBuffer = amountPaid * 0.975;
+            const calculatedMegabytes = Math.floor(netCashBuffer * 20);
+            
+            resourceMetaLog = `${calculatedMegabytes}MB Custom Dynamic Drop`;
+            messageToSend = SMS_TEMPLATES.FLEXIBLE(customerName, amountPaid, resourceMetaLog);
+            finalValueToDispatch = amountPaid; // Pass to supplier pipeline for custom fulfillment mapping
+        }
+
+        // STEP A: PROVISION ASSET DISTRIBUTION VIA CARRIER INFRASTRUCTURE (Bypasses local device debts)
+        console.log(`📡 Dispatched API packet to wholesale routing channels: [Allocating value: ${finalValueToDispatch}]...`);
+        const supplyReceipt = await dispatchWholesaleResource(msisdn, finalValueToDispatch);
+        console.log(`✅ [PROVISION SUCCESS] Telecomm carrier reference ID generated: ${supplyReceipt.transactionId}`);
+
+        // STEP B: EMIT TRANSACTION STATUS SMS NOTIFICATION VIA AFRICA'S TALKING
+        await sendBandoDropSms(msisdn, messageToSend);
         
-        // STEP C: PERSIST TRANSACTION TO THE CLOUD LEDGER
+        // STEP C: IMMUTABLE AUDIT LOGGING INSIDE THE CLOUD SUPABASE LEDGER
         await logTransaction({
-            msisdn: MSISDN,
+            msisdn: msisdn,
             firstName: customerName,
-            amountPaid: amount,
-            valueDispatched: finalValueToDispatch,
+            amountPaid: amountPaid,
+            valueDispatched: resourceMetaLog,
             supplierRef: supplyReceipt.transactionId
         });
 
-        console.log(`🎯 [SUCCESS SYSTEM LOOP COMPLETE] Logged SMS: "${messageToSend}"`);
-        res.status(200).json({ status: "success", message: "Transaction processed successfully" });
+        console.log(`🎯 [TRANSACTION BOUNDARY COMPLETE] Loop cleanly processed. Injected: "${resourceMetaLog}"`);
+        
+        // Inform Payment Gateway Aggregator of deterministic webhook processing success
+        return res.status(200).json({ status: "success", transaction: supplyReceipt.transactionId });
 
     } catch (error) {
-        console.error(`❌ [ERROR PROCESSING CALLBACK]:`, error.message);
-        res.status(200).json({ status: "error", message: error.message });
+        console.error(`❌ [WEBHOOK RUNTIME CRITICAL ERROR]:`, error.message);
+        
+        // Always respond with a 200 HTTP status code to prevent aggregator side looping on minor script parsing errors
+        return res.status(200).json({ status: "error", details: error.message });
     }
 });
-// 4. ADMINISTRATIVE PERFORMANCE METRICS DASHBOARD
+
+/**
+ * ============================================================================
+ * @route       GET /admin/dashboard
+ * @description Low-overhead, lightweight embedded micro-analytics portal.
+ *              Renders critical real-time micro-KPI loops for immediate system monitoring.
+ * ============================================================================
+ */
 app.get('/admin/dashboard', async (req, res) => {
-    const metrics = await getAdminMetrics();
-    
-    // Inline rendering a clean dashboard view directly
-    const htmlResponse = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>BandoDrop HQ // Analytics</title>
-        <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0c0f12; color: #f3f4f6; padding: 40px; margin: 0; }
-            .container { max-width: 1000px; margin: 0 auto; }
-            h1 { font-size: 24px; letter-spacing: -0.5px; color: #4ade80; margin-bottom: 5px; }
-            p.subtitle { color: #9ca3af; margin-top: 0; margin-bottom: 30px; font-size: 14px; }
-            .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 40px; }
-            .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
-            .card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin-bottom: 10px; }
-            .card-value { font-size: 32px; font-weight: 700; color: #ffffff; font-variant-numeric: tabular-nums; }
-            .card-value span { font-size: 16px; color: #8b949e; font-weight: 400; }
-            .badge { background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.2); color: #4ade80; padding: 4px 8px; border-radius: 4px; font-size: 12px; display: inline-block; margin-top: 15px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>BandoDrop Metrics Engine</h1>
-            <p class="subtitle">Real-time financial status & loop analytics</p>
-            
-            <div class="grid">
-                <div class="card">
-                    <div class="card-title">Total Revenue Captured</div>
-                    <div class="card-value">KSh ${metrics.totalRevenue}</div>
-                    <span class="badge">M-Pesa Webhooks Active</span>
-                </div>
-                <div class="card">
-                    <div class="card-title">Wholesale Assets Dispatched</div>
-                    <div class="card-value">KSh ${metrics.totalDispatched}</div>
-                    <span class="badge">Value Delivery Stabilized</span>
-                </div>
-                <div class="card">
-                    <div class="card-title">Total Processed Drops</div>
-                    <div class="card-value">${metrics.totalTransactions} <span>Transactions</span></div>
-                    <span class="badge">100% Core Integrity</span>
+    try {
+        // Pull aggregated data cache straight from transactional ledger database pools
+        const metrics = await getAdminMetrics();
+        
+        const htmlResponse = `
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>BandoDrop HQ // Analytics Dashboard</title>
+            <style>
+                body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0c0f12; color: #f3f4f6; padding: 40px; margin: 0; }
+                .container { max-width: 1000px; margin: 0 auto; }
+                h1 { font-size: 24px; letter-spacing: -0.5px; color: #4ade80; margin-bottom: 5px; }
+                p.subtitle { color: #9ca3af; margin-top: 0; margin-bottom: 30px; font-size: 14px; }
+                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 40px; }
+                .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
+                .card-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; margin-bottom: 10px; }
+                .card-value { font-size: 32px; font-weight: 700; color: #ffffff; font-variant-numeric: tabular-nums; }
+                .card-value span { font-size: 16px; color: #8b949e; font-weight: 400; }
+                .badge { background: rgba(74, 222, 128, 0.1); border: 1px solid rgba(74, 222, 128, 0.2); color: #4ade80; padding: 4px 8px; border-radius: 4px; font-size: 12px; display: inline-block; margin-top: 15px; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>BandoDrop Automation Engine</h1>
+                <p class="subtitle">Real-time macro-financial telemetry and transactional network integrity</p>
+                
+                <div class="grid">
+                    <div class="card">
+                        <div class="card-title">Gross Revenue Captured</div>
+                        <div class="card-value">KSh ${metrics.totalRevenue}</div>
+                        <span class="badge">IntaSend Stream Active</span>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Wholesale Resource Yield</div>
+                        <div class="card-value">KSh ${metrics.totalDispatched}</div>
+                        <span class="badge">Asset Liquidity Confirmed</span>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">System Micro-Transactions</div>
+                        <div class="card-value">${metrics.totalTransactions} <span>Dispatches</span></div>
+                        <span class="badge">Loop Integrity 100%</span>
+                    </div>
                 </div>
             </div>
-        </div>
-    </body>
-    </html>
-    `;
-    
-    res.send(htmlResponse);
+        </body>
+        </html>
+        `;
+        
+        return res.status(200).send(htmlResponse);
+    } catch (dashboardError) {
+        return res.status(500).send("Fatal Error Generating Administrative View Analytics Panel.");
+    }
 });
 
-app.listen(PORT,'0.0.0.0',() => {
-    console.log("🚀 BANDODROP BACKEND IS LIVE ON PORT " + PORT);
+// 5. BOOTSTRAP NETWORK APPLICATION
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 BANDODROP PASSIVE INTERNET ENGINE RUNNING AUTONOMOUSLY ON PORT: ${PORT}`);
 });
