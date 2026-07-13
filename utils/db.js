@@ -9,6 +9,12 @@ const cleanEnvVar = (val) => {
 const supabaseUrl = cleanEnvVar(process.env.SUPABASE_URL);
 const supabaseKey = cleanEnvVar(process.env.SUPABASE_KEY);
 
+// 📡 DIAGNOSTIC TELEMETRY LAYER: Safely audit environment strings on startup
+console.log("----------------------------------------------------------------");
+console.log(`📡 [DB INITIALIZATION DEBUG]: Target URL: "${supabaseUrl}"`);
+console.log(`📡 [DB INITIALIZATION DEBUG]: Key Signature Length: ${supabaseKey ? supabaseKey.length : 0} characters`);
+console.log("----------------------------------------------------------------");
+
 // Guard check to make sure the environment variables are actually leaking correctly into the runtime container
 if (!supabaseUrl || !supabaseKey) {
     console.error("⚠️  [DATABASE SYSTEM WARNING]: SUPABASE_URL or SUPABASE_KEY environment parameters are undefined or empty!");
