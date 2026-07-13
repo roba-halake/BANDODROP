@@ -61,9 +61,15 @@ app.post('/api/mpesa-callback', async (req, res) => {
             return res.status(200).json({ status: "skipped", message: "Non-completion state change logged." });
         }
 
+        // AUTOMATED PHONE NUMBER NORMALIZATION LAYER
+        // Transforms localized strings (e.g., "2547XXXXXXXX") into the international standard E.164 format ("+2547XXXXXXXX")
+        let msisdn = account ? account.toString().trim() : "";
+        if (msisdn && !msisdn.startsWith('+')) {
+            msisdn = `+${msisdn}`;
+        }
+
         // Explicit Type Casting for precision mathematical financial calculations
         const amountPaid = parseFloat(net_amount);
-        const msisdn = account; // Formatted structural string (e.g., "2547XXXXXXXX")
         const customerName = 'Hustler'; // Dynamic placeholder; fallback strategy for campus marketing privacy
 
         console.log(`\n🔔 [AUTOMATION TRIGGERED] Processing verified KSh ${amountPaid} loop disbursement for ${msisdn}`);
@@ -136,13 +142,18 @@ app.post('/api/mpesa-callback', async (req, res) => {
         await sendBandoDropSms(msisdn, messageToSend);
         
         // STEP C: IMMUTABLE AUDIT LOGGING INSIDE THE CLOUD SUPABASE LEDGER
-        await logTransaction({
-            msisdn: msisdn,
-            firstName: customerName,
-            amountPaid: amountPaid,
-            valueDispatched: resourceMetaLog,
-            supplierRef: supplyReceipt.transactionId
-        });
+        try {
+            await logTransaction({
+                msisdn: msisdn,
+                firstName: customerName,
+                amountPaid: amountPaid,
+                valueDispatched: resourceMetaLog,
+                supplierRef: supplyReceipt.transactionId
+            });
+        } catch (dbError) {
+            // Log database non-blocking anomalies without breaking user telecom delivery loop
+            console.error(`❌ [DATABASE ERROR]: Failed to persist row to cloud ledger:`, dbError.message);
+        }
 
         console.log(`🎯 [TRANSACTION BOUNDARY COMPLETE] Loop cleanly processed. Injected: "${resourceMetaLog}"`);
         
