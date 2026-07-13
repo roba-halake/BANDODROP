@@ -1,7 +1,18 @@
 const { createClient } = require('@supabase/supabase-js');
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+// Sanitize strings to instantly strip trailing spaces, newlines, or accidental literal quotes
+const cleanEnvVar = (val) => {
+    if (!val) return '';
+    return val.toString().trim().replace(/^['"]|['"]$/g, '');
+};
+
+const supabaseUrl = cleanEnvVar(process.env.SUPABASE_URL);
+const supabaseKey = cleanEnvVar(process.env.SUPABASE_KEY);
+
+// Guard check to make sure the environment variables are actually leaking correctly into the runtime container
+if (!supabaseUrl || !supabaseKey) {
+    console.error("⚠️  [DATABASE SYSTEM WARNING]: SUPABASE_URL or SUPABASE_KEY environment parameters are undefined or empty!");
+}
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -34,7 +45,6 @@ async function logTransaction({ msisdn, firstName, amountPaid, valueDispatched, 
  */
 async function getAdminMetrics() {
     try {
-        // Fetch all transactions to calculate metrics locally (safe for sandbox scale)
         const { data, error } = await supabase
             .from('transactions')
             .select('amount_paid, value_dispatched')
@@ -44,7 +54,12 @@ async function getAdminMetrics() {
 
         const totalTransactions = data.length;
         const totalRevenue = data.reduce((sum, row) => sum + row.amount_paid, 0);
-        const totalDispatched = data.reduce((sum, row) => sum + row.value_dispatched, 0);
+        
+        // Handle value_dispatched text strings vs integers cleanly during aggregation
+        const totalDispatched = data.reduce((sum, row) => {
+            const num = parseFloat(row.value_dispatched);
+            return sum + (isNaN(num) ? 0 : num);
+        }, 0);
 
         return {
             totalTransactions,
