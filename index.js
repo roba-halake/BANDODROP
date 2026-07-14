@@ -142,16 +142,16 @@ app.post('/api/mpesa-callback', async (req, res) => {
         await sendBandoDropSms(msisdn, messageToSend);
         
         // STEP C: IMMUTABLE AUDIT LOGGING INSIDE THE CLOUD SUPABASE LEDGER
+        // Passing finalValueToDispatch (integer) instead of resourceMetaLog (string) to prevent Postgres schema mismatch errors
         try {
             await logTransaction({
                 msisdn: msisdn,
                 firstName: customerName,
                 amountPaid: amountPaid,
-                valueDispatched: resourceMetaLog,
+                valueDispatched: finalValueToDispatch,
                 supplierRef: supplyReceipt.transactionId
             });
         } catch (dbError) {
-            // Log database non-blocking anomalies without breaking user telecom delivery loop
             console.error(`❌ [DATABASE ERROR]: Failed to persist row to cloud ledger:`, dbError.message);
         }
 
