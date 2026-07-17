@@ -34,7 +34,7 @@ const app = express();
 // Enable Cross-Origin Resource Sharing for decoupling administrative client frontends
 app.use(cors());
 
-// Express global parsing middlewares for handling handling payload variations
+// Express global parsing middlewares for handling payload variations
 app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // Required to parse Africa's Talking incoming USSD strings
 
@@ -48,7 +48,7 @@ const { logTransaction, getAdminMetrics } = require('./utils/db');
 
 /**
  * ============================================================================
- * @route       POST /api/ussd
+ * @route        POST /api/ussd
  * @description Offline USSD Gateway entry point via Africa's Talking.
  *              Allows zero-data, zero-SMS campus interactions to drive payment loops.
  * ============================================================================
@@ -70,23 +70,23 @@ app.post('/api/ussd', async (req, res) => {
     } 
     else if (text === '1') {
         response = `END Processing 1GB Pack. Please check your screen for the M-PESA PIN prompt!`;
-        triggerUssdPayment(phoneNumber, 23);
+        triggerUssdPayment(phoneNumber, 23, '1GB_1Hour');
     } 
     else if (text === '2') {
         response = `END Processing 1.5GB Pack. Please check your screen for the M-PESA PIN prompt!`;
-        triggerUssdPayment(phoneNumber, 52);
+        triggerUssdPayment(phoneNumber, 52, '1.5GB_3Hours');
     } 
     else if (text === '3') {
         response = `END Processing 2GB Pack. Please check your screen for the M-PESA PIN prompt!`;
-        triggerUssdPayment(phoneNumber, 110);
+        triggerUssdPayment(phoneNumber, 110, '2GB_24Hours');
     } 
     else if (text === '4') {
         response = `END Processing 45 Mins Call. Please check your screen for the M-PESA PIN prompt!`;
-        triggerUssdPayment(phoneNumber, 22);
+        triggerUssdPayment(phoneNumber, 22, '45Mins_Call');
     } 
     else if (text === '5') {
         response = `END Processing 200 SMS Pack. Please check your screen for the M-PESA PIN prompt!`;
-        triggerUssdPayment(phoneNumber, 10);
+        triggerUssdPayment(phoneNumber, 10, '200_SMS');
     } 
     else {
         response = `END Invalid selection. Please try dialing the menu code again.`;
@@ -99,19 +99,20 @@ app.post('/api/ussd', async (req, res) => {
 
 /**
  * ============================================================================
- * @route       POST /api/pay
+ * @route        POST /api/pay
  * @description Backup endpoint / manual API driver to trigger STK pushes directly.
- *              Formats the input number to international standard (2547XXXXXXXX).
+ *               Formats the input number to international standard (2547XXXXXXXX).
  * ============================================================================
  */
 app.post('/api/pay', async (req, res) => {
-    const { phoneNumber, amount } = req.body;
+    const { phoneNumber, amount, packageName } = req.body;
 
     if (!phoneNumber || !amount) {
         return res.status(400).json({ success: false, message: "Phone number and amount are required." });
     }
 
     let formattedPhone = normalizePhoneNumber(phoneNumber);
+    let assignedPackName = packageName || 'Manual_Payment';
 
     try {
         console.log(`📡 [INTASEND API] Initiating manual STK Push for KSh ${amount} to ${formattedPhone}`);
@@ -124,7 +125,7 @@ app.post('/api/pay', async (req, res) => {
             host: 'https://bandodrop.com',
             amount: Number(amount),
             phone_number: formattedPhone,
-            api_ref: `BandoDrop-Pay-${Date.now()}`,
+            api_ref: `${assignedPackName}_${formattedPhone}_${Date.now()}`,
         });
 
         return res.status(200).json({
@@ -143,20 +144,30 @@ app.post('/api/pay', async (req, res) => {
 
 /**
  * ============================================================================
- * @route       POST /api/mpesa-callback
+ * @route        POST /api/mpesa-callback
  * @description Production payment webhook listener for IntaSend payment gateway.
- *              Acts as an autonomous financial loop dispatcher.
+ *               Acts as an autonomous financial loop dispatcher.
  * ============================================================================
  */
 app.post('/api/mpesa-callback', async (req, res) => {
     try {
-        const { account, net_amount, state, challenge } = req.body;
+        const { account, net_amount, state, challenge, invoice_id, api_ref } = req.body;
 
+        // 1. Handle IntaSend handshake handshake challenge check
+        if (challenge) {
+            console.log("🔒 [WEBHOOK HANDSHAKE] Challenge verification signature processed cleanly.");
+            return res.status(200).json({ challenge });
+        }
+
+        // 2. Intercept security profile overrides
         if (process.env.INTASEND_CHALLENGE && challenge !== process.env.INTASEND_CHALLENGE) {
             console.warn(`🚨 [SECURITY ALERT] Unauthorized challenge mismatch intercepted.`);
             return res.status(401).json({ status: "error", message: "Unauthorized webhook origin" });
         }
 
+        console.log(`🔔 Payment Callback Alert! Invoice: ${invoice_id || 'N/A'} | Status: ${state} | Ref: ${api_ref}`);
+
+        // 3. Drop processing routines if the status isn't explicitly COMPLETE
         if (state !== 'COMPLETE') {
             console.log(`ℹ️  [WEBHOOK EVENT: STATE REJECTED] Intercepted transaction status: [${state}]. Skipping core execution.`);
             return res.status(200).json({ status: "skipped", message: "Non-completion state change logged." });
@@ -182,27 +193,27 @@ app.post('/api/mpesa-callback', async (req, res) => {
          * Maps incoming net liquidity pools to specific technical assets
          * --------------------------------------------------------------------
          */
-        if (amountPaid === 23) {
+        if (amountPaid === 23 || (api_ref && api_ref.includes('1GB'))) {
             resourceMetaLog = "1GB (1 Hour) High-Velocity Pack";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 23; 
         } 
-        else if (amountPaid === 52) {
+        else if (amountPaid === 52 || (api_ref && api_ref.includes('1.5GB'))) {
             resourceMetaLog = "1.5GB (3 Hours) Streaming Pack";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 52;
         } 
-        else if (amountPaid === 110) {
+        else if (amountPaid === 110 || (api_ref && api_ref.includes('2GB'))) {
             resourceMetaLog = "2GB (24 Hours) Heavy Study Pack";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 110;
         } 
-        else if (amountPaid === 22) {
+        else if (amountPaid === 22 || (api_ref && api_ref.includes('45Mins'))) {
             resourceMetaLog = "45 Calling Minutes Bundle (3 Hours)";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 20; 
         } 
-        else if (amountPaid === 10) {
+        else if (amountPaid === 10 || (api_ref && api_ref.includes('200_SMS'))) {
             resourceMetaLog = "200 SMS Bundle Pack (24 Hours)";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 10;
@@ -218,7 +229,7 @@ app.post('/api/mpesa-callback', async (req, res) => {
         }
 
         // STEP A: PROVISION ASSET DISTRIBUTION VIA CARRIER INFRASTRUCTURE
-        console.log(`📡 Dispatched API packet to wholesale routing channels: [Allocating value: ${finalValueToDispatch}]...`);
+        console.log(`Dispatched API packet to wholesale routing channels: [Allocating value: ${finalValueToDispatch}]...`);
         const supplyReceipt = await dispatchWholesaleResource(msisdn, finalValueToDispatch);
         console.log(`✅ [PROVISION SUCCESS] Telecomm carrier reference ID generated: ${supplyReceipt.transactionId}`);
 
@@ -232,7 +243,9 @@ app.post('/api/mpesa-callback', async (req, res) => {
                 firstName: customerName,
                 amountPaid: amountPaid,
                 valueDispatched: finalValueToDispatch,
-                supplierRef: supplyReceipt.transactionId
+                supplierRef: supplyReceipt.transactionId,
+                invoiceId: invoice_id,
+                apiRef: api_ref
             });
         } catch (dbError) {
             console.error(`❌ [DATABASE ERROR]: Failed to persist row to cloud ledger:`, dbError.message);
@@ -249,7 +262,7 @@ app.post('/api/mpesa-callback', async (req, res) => {
 
 /**
  * ============================================================================
- * @route       GET /admin/dashboard
+ * @route        GET /admin/dashboard
  * @description Low-overhead, lightweight embedded micro-analytics portal.
  * ============================================================================
  */
@@ -327,7 +340,7 @@ function normalizePhoneNumber(phone) {
 }
 
 // Background worker bridging the USSD response text choices cleanly into the IntaSend collection SDK
-async function triggerUssdPayment(phone, amount) {
+async function triggerUssdPayment(phone, amount, packageName) {
     const formattedPhone = normalizePhoneNumber(phone);
 
     try {
@@ -338,9 +351,9 @@ async function triggerUssdPayment(phone, amount) {
             email: 'comrade@bandodrop.com',
             amount: Number(amount),
             phone_number: formattedPhone,
-            api_ref: `BandoDrop-USSD-${Date.now()}`,
+            api_ref: `${packageName}_${formattedPhone}_${Date.now()}`,
         });
-        console.log(`📡 [USSD AUTOMATION] STK Push dispatched asynchronously via USSD for KSh ${amount} to ${formattedPhone}`);
+        console.log(`📡 [USSD AUTOMATION] STK Push dispatched asynchronously via USSD for KSh ${amount} (${packageName}) to ${formattedPhone}`);
     } catch (error) {
         console.error('❌ [USSD AUTO PAYMENT TRIGGER ERROR]:', error.message);
     }
