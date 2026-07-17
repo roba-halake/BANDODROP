@@ -10,10 +10,19 @@
 // 1. ENVIRONMENT CONFIGURATION & LIFECYCLE INITIALIZATION
 require('dotenv').config();
 
+// Initialize the IntaSend Client SDK
+const IntaSend = require('intasend-node');
+const intasend = new IntaSend(
+    process.env.INTASEND_PUBLISHABLE_KEY,
+    process.env.INTASEND_SECRET_KEY,
+    true // Set to true for Sandbox / Test Mode, or false for Production
+);
+
 console.log("----------------------------------------------------------------");
-console.log("⚙️  SYSTEM DIAGNOSTICS: INITIALIZING TELECOM MODULES");
+console.log("⚙️  SYSTEM DIAGNOSTICS: INITIALIZING TELECOM & PAYMENT MODULES");
 console.log(`⚙️  Suppliers Layer: ${process.env.AT_API_KEY ? "CONNECTED [Verified Masked]" : "CRITICAL MISSING AT_API_KEY"}`);
 console.log(`⚙️  Data Repository: ${process.env.SUPABASE_URL ? "CONNECTED [Supabase Pool Active]" : "CRITICAL MISSING DB_URL"}`);
+console.log(`⚙️  IntaSend Gateway: ${process.env.INTASEND_PUBLISHABLE_KEY ? "READY [Keys Detected]" : "CRITICAL MISSING INTASEND KEYS"}`);
 console.log("----------------------------------------------------------------");
 
 // 2. STACK DEPENDENCIES & INGESTION MIDDLEWARE
@@ -25,8 +34,9 @@ const app = express();
 // Enable Cross-Origin Resource Sharing for decoupling administrative client frontends
 app.use(cors());
 
-// Express global JSON body-parsing middleware for handling IntaSend webhook streams
+// Express global parsing middlewares for handling handling payload variations
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Required to parse Africa's Talking incoming USSD strings
 
 const PORT = process.env.PORT || 3000;
 
@@ -38,39 +48,127 @@ const { logTransaction, getAdminMetrics } = require('./utils/db');
 
 /**
  * ============================================================================
+ * @route       POST /api/ussd
+ * @description Offline USSD Gateway entry point via Africa's Talking.
+ *              Allows zero-data, zero-SMS campus interactions to drive payment loops.
+ * ============================================================================
+ */
+app.post('/api/ussd', async (req, res) => {
+    const { sessionId, serviceCode, phoneNumber, text } = req.body;
+
+    let response = '';
+
+    // Step-by-step text tracking input maps (e.g., "", "1", "2")
+    if (text === '') {
+        response = `CON Welcome to BandoDrop HQ \n`;
+        response += `Select high-velocity campus pack:\n`;
+        response += `1. 1GB (1 Hour) - KSh 23\n`;
+        response += `2. 1.5GB (3 Hours) - KSh 52\n`;
+        response += `3. 2GB (24 Hours) - KSh 110\n`;
+        response += `4. 45 Mins Call (3 Hours) - KSh 22\n`;
+        response += `5. 200 SMS Pack (24 Hours) - KSh 10`;
+    } 
+    else if (text === '1') {
+        response = `END Processing 1GB Pack. Please check your screen for the M-PESA PIN prompt!`;
+        triggerUssdPayment(phoneNumber, 23);
+    } 
+    else if (text === '2') {
+        response = `END Processing 1.5GB Pack. Please check your screen for the M-PESA PIN prompt!`;
+        triggerUssdPayment(phoneNumber, 52);
+    } 
+    else if (text === '3') {
+        response = `END Processing 2GB Pack. Please check your screen for the M-PESA PIN prompt!`;
+        triggerUssdPayment(phoneNumber, 110);
+    } 
+    else if (text === '4') {
+        response = `END Processing 45 Mins Call. Please check your screen for the M-PESA PIN prompt!`;
+        triggerUssdPayment(phoneNumber, 22);
+    } 
+    else if (text === '5') {
+        response = `END Processing 200 SMS Pack. Please check your screen for the M-PESA PIN prompt!`;
+        triggerUssdPayment(phoneNumber, 10);
+    } 
+    else {
+        response = `END Invalid selection. Please try dialing the menu code again.`;
+    }
+
+    // Africa's Talking gateway demands explicit plain text response headers
+    res.set('Content-Type', 'text/plain');
+    return res.status(200).send(response);
+});
+
+/**
+ * ============================================================================
+ * @route       POST /api/pay
+ * @description Backup endpoint / manual API driver to trigger STK pushes directly.
+ *              Formats the input number to international standard (2547XXXXXXXX).
+ * ============================================================================
+ */
+app.post('/api/pay', async (req, res) => {
+    const { phoneNumber, amount } = req.body;
+
+    if (!phoneNumber || !amount) {
+        return res.status(400).json({ success: false, message: "Phone number and amount are required." });
+    }
+
+    let formattedPhone = normalizePhoneNumber(phoneNumber);
+
+    try {
+        console.log(`📡 [INTASEND API] Initiating manual STK Push for KSh ${amount} to ${formattedPhone}`);
+        const collection = intasend.collection();
+        
+        const response = await collection.mpesaStkPush({
+            first_name: 'Samuel',
+            last_name: 'Halake',
+            email: 'samuel@bandodrop.com',
+            host: 'https://bandodrop.com',
+            amount: Number(amount),
+            phone_number: formattedPhone,
+            api_ref: `BandoDrop-Pay-${Date.now()}`,
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: 'STK push successfully triggered. Please enter your M-PESA PIN.',
+            data: response
+        });
+    } catch (error) {
+        console.error('❌ [INTASEND STK ERROR]:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Failed to initiate M-PESA payment prompt. Check server logs.'
+        });
+    }
+});
+
+/**
+ * ============================================================================
  * @route       POST /api/mpesa-callback
  * @description Production payment webhook listener for IntaSend payment gateway.
  *              Acts as an autonomous financial loop dispatcher.
- *              Bypasses localized carrier debts (e.g., Okoa Jahazi) via corporate push.
  * ============================================================================
  */
 app.post('/api/mpesa-callback', async (req, res) => {
     try {
-        // Deconstruct verified payload format dispatched from IntaSend Webhook stream
         const { account, net_amount, state, challenge } = req.body;
 
-        // OPTIONAL SECURITY FILTER: Validate incoming challenge tokens against environment configurations
         if (process.env.INTASEND_CHALLENGE && challenge !== process.env.INTASEND_CHALLENGE) {
             console.warn(`🚨 [SECURITY ALERT] Unauthorized challenge mismatch intercepted.`);
             return res.status(401).json({ status: "error", message: "Unauthorized webhook origin" });
         }
 
-        // Defensive Filter: Isolate state changes. Drop processing unless transaction is definitively marked COMPLETE
         if (state !== 'COMPLETE') {
             console.log(`ℹ️  [WEBHOOK EVENT: STATE REJECTED] Intercepted transaction status: [${state}]. Skipping core execution.`);
             return res.status(200).json({ status: "skipped", message: "Non-completion state change logged." });
         }
 
-        // AUTOMATED PHONE NUMBER NORMALIZATION LAYER
-        // Transforms localized strings (e.g., "2547XXXXXXXX") into the international standard E.164 format ("+2547XXXXXXXX")
         let msisdn = account ? account.toString().trim() : "";
         if (msisdn && !msisdn.startsWith('+')) {
             msisdn = `+${msisdn}`;
         }
 
-        // Explicit Type Casting for precision mathematical financial calculations
         const amountPaid = parseFloat(net_amount);
-        const customerName = 'Hustler'; // Dynamic placeholder; fallback strategy for campus marketing privacy
+        const customerName = 'Hustler'; 
 
         console.log(`\n🔔 [AUTOMATION TRIGGERED] Processing verified KSh ${amountPaid} loop disbursement for ${msisdn}`);
 
@@ -85,64 +183,49 @@ app.post('/api/mpesa-callback', async (req, res) => {
          * --------------------------------------------------------------------
          */
         if (amountPaid === 23) {
-            // Tunukiwa Gifting Optimization Hook
             resourceMetaLog = "1GB (1 Hour) High-Velocity Pack";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 23; 
         } 
         else if (amountPaid === 52) {
-            // Tunukiwa Mid-Tier Optimization Hook
             resourceMetaLog = "1.5GB (3 Hours) Streaming Pack";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 52;
         } 
         else if (amountPaid === 110) {
-            // High-Yield Core Margin Anchor (Target Profit: +KSh 10.00)
             resourceMetaLog = "2GB (24 Hours) Heavy Study Pack";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 110;
         } 
         else if (amountPaid === 22) {
-            // Telecom Airtime Allocation Logic for Talk-Time Minutes
             resourceMetaLog = "45 Calling Minutes Bundle (3 Hours)";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
-            finalValueToDispatch = 20; // Prorated face-value airtime drop injection
+            finalValueToDispatch = 20; 
         } 
         else if (amountPaid === 10) {
-            // High-Margin Promotional SMS Route Injection 
             resourceMetaLog = "200 SMS Bundle Pack (24 Hours)";
             messageToSend = SMS_TEMPLATES.STANDARD(customerName, amountPaid, resourceMetaLog);
             finalValueToDispatch = 10;
         } 
         else {
-            /**
-             * ----------------------------------------------------------------
-             * ADVANTAGE VECTOR: "Sema na Wallet Yako" Dynamic Value Adjuster
-             * Executed dynamically if an atypical/odd cash entry enters the loop.
-             * Protects the margin by using a 20MB/Shilling allocation scale.
-             * ----------------------------------------------------------------
-             */
             console.log(`⚠️  [UNKNOWN VALUE TARIFF] KSh ${amountPaid}. Initializing Dynamic Adjuster Matrix.`);
-            
-            // Deduct processing gateway fees (2.5%) then multiply by competitive prorated index
             const netCashBuffer = amountPaid * 0.975;
             const calculatedMegabytes = Math.floor(netCashBuffer * 20);
             
             resourceMetaLog = `${calculatedMegabytes}MB Custom Dynamic Drop`;
             messageToSend = SMS_TEMPLATES.FLEXIBLE(customerName, amountPaid, resourceMetaLog);
-            finalValueToDispatch = amountPaid; // Pass to supplier pipeline for custom fulfillment mapping
+            finalValueToDispatch = amountPaid; 
         }
 
-        // STEP A: PROVISION ASSET DISTRIBUTION VIA CARRIER INFRASTRUCTURE (Bypasses local device debts)
+        // STEP A: PROVISION ASSET DISTRIBUTION VIA CARRIER INFRASTRUCTURE
         console.log(`📡 Dispatched API packet to wholesale routing channels: [Allocating value: ${finalValueToDispatch}]...`);
         const supplyReceipt = await dispatchWholesaleResource(msisdn, finalValueToDispatch);
         console.log(`✅ [PROVISION SUCCESS] Telecomm carrier reference ID generated: ${supplyReceipt.transactionId}`);
 
-        // STEP B: EMIT TRANSACTION STATUS SMS NOTIFICATION VIA AFRICA'S TALKING
+        // STEP B: EMIT TRANSACTION STATUS SMS NOTIFICATION
         await sendBandoDropSms(msisdn, messageToSend);
         
         // STEP C: IMMUTABLE AUDIT LOGGING INSIDE THE CLOUD SUPABASE LEDGER
-        // Passing finalValueToDispatch (integer) instead of resourceMetaLog (string) to prevent Postgres schema mismatch errors
         try {
             await logTransaction({
                 msisdn: msisdn,
@@ -156,14 +239,10 @@ app.post('/api/mpesa-callback', async (req, res) => {
         }
 
         console.log(`🎯 [TRANSACTION BOUNDARY COMPLETE] Loop cleanly processed. Injected: "${resourceMetaLog}"`);
-        
-        // Inform Payment Gateway Aggregator of deterministic webhook processing success
         return res.status(200).json({ status: "success", transaction: supplyReceipt.transactionId });
 
     } catch (error) {
         console.error(`❌ [WEBHOOK RUNTIME CRITICAL ERROR]:`, error.message);
-        
-        // Always respond with a 200 HTTP status code to prevent aggregator side looping on minor script parsing errors
         return res.status(200).json({ status: "error", details: error.message });
     }
 });
@@ -172,12 +251,10 @@ app.post('/api/mpesa-callback', async (req, res) => {
  * ============================================================================
  * @route       GET /admin/dashboard
  * @description Low-overhead, lightweight embedded micro-analytics portal.
- *              Renders critical real-time micro-KPI loops for immediate system monitoring.
  * ============================================================================
  */
 app.get('/admin/dashboard', async (req, res) => {
     try {
-        // Pull aggregated data cache straight from transactional ledger database pools
         const metrics = await getAdminMetrics();
         
         const htmlResponse = `
@@ -204,7 +281,6 @@ app.get('/admin/dashboard', async (req, res) => {
             <div class="container">
                 <h1>BandoDrop Automation Engine</h1>
                 <p class="subtitle">Real-time macro-financial telemetry and transactional network integrity</p>
-                
                 <div class="grid">
                     <div class="card">
                         <div class="card-title">Gross Revenue Captured</div>
@@ -232,6 +308,43 @@ app.get('/admin/dashboard', async (req, res) => {
         return res.status(500).send("Fatal Error Generating Administrative View Analytics Panel.");
     }
 });
+
+/**
+ * ============================================================================
+ * INTERNAL UTILITY UTILS & HOOK SUB-FUNCTIONS
+ * ============================================================================
+ */
+
+// Helper utility to strictly format telephone strings to standard '2547XXXXXXXX' format
+function normalizePhoneNumber(phone) {
+    let cleaned = phone.toString().trim();
+    if (cleaned.startsWith('+')) {
+        cleaned = cleaned.replace('+', '');
+    } else if (cleaned.startsWith('0')) {
+        cleaned = '254' + cleaned.slice(1);
+    }
+    return cleaned;
+}
+
+// Background worker bridging the USSD response text choices cleanly into the IntaSend collection SDK
+async function triggerUssdPayment(phone, amount) {
+    const formattedPhone = normalizePhoneNumber(phone);
+
+    try {
+        const collection = intasend.collection();
+        await collection.mpesaStkPush({
+            first_name: 'Campus',
+            last_name: 'Comrade',
+            email: 'comrade@bandodrop.com',
+            amount: Number(amount),
+            phone_number: formattedPhone,
+            api_ref: `BandoDrop-USSD-${Date.now()}`,
+        });
+        console.log(`📡 [USSD AUTOMATION] STK Push dispatched asynchronously via USSD for KSh ${amount} to ${formattedPhone}`);
+    } catch (error) {
+        console.error('❌ [USSD AUTO PAYMENT TRIGGER ERROR]:', error.message);
+    }
+}
 
 // 5. BOOTSTRAP NETWORK APPLICATION
 app.listen(PORT, '0.0.0.0', () => {
