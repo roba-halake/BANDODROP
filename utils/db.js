@@ -22,27 +22,38 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+/**
+ * Persists a completed transaction into the Supabase cloud ledger.
+ * Features strict defensive parsing to prevent PostgreSQL type mismatch rejections.
+ */
 async function logTransaction({ msisdn, firstName, amountPaid, valueDispatched, supplierRef }) {
     try {
+        // Defensive Type Sanitization: Prevent Postgres type syntax rejections
+        const parsedAmountPaid = parseFloat(amountPaid);
+        const parsedValueDispatched = parseFloat(valueDispatched);
+
+        const recordPayload = { 
+            msisdn: msisdn ? String(msisdn).trim() : null, 
+            first_name: firstName ? String(firstName).trim() : 'Hustler', 
+            // Fallback to rounded integer if parseFloat returns NaN, ensuring compatibility
+            amount_paid: isNaN(parsedAmountPaid) ? 0 : Math.round(parsedAmountPaid), 
+            value_dispatched: isNaN(parsedValueDispatched) ? 0 : Math.round(parsedValueDispatched), 
+            supplier_ref: supplierRef ? String(supplierRef).trim() : null 
+        };
+
         const { data, error } = await supabase
             .from('transactions')
-            .insert([
-                { 
-                    msisdn, 
-                    first_name: firstName, 
-                    amount_paid: amountPaid, 
-                    value_dispatched: valueDispatched, 
-                    supplier_ref: supplierRef 
-                }
-            ])
+            .insert([recordPayload])
             .select();
 
         if (error) throw error;
         
-        console.log(`💾 [DATABASE SYSTEM LOGGED]: Transaction row persisted securely. ID: ${data[0].id}`);
+        console.log(`💾 [DATABASE SYSTEM LOGGED]: Transaction row persisted securely. ID: ${data[0]?.id}`);
         return data;
     } catch (error) {
         console.error(`❌ [DATABASE ERROR]: Failed to persist row to cloud ledger:`, error.message);
+        // Non-blocking return allows customer delivery loop to complete cleanly even if DB fails
+        return null;
     }
 }
 
@@ -59,12 +70,16 @@ async function getAdminMetrics() {
         if (error) throw error;
 
         const totalTransactions = data.length;
-        const totalRevenue = data.reduce((sum, row) => sum + row.amount_paid, 0);
+
+        // Defensive sum aggregations handling strings, decimals, and nulls
+        const totalRevenue = data.reduce((sum, row) => {
+            const val = parseFloat(row.amount_paid);
+            return sum + (isNaN(val) ? 0 : val);
+        }, 0);
         
-        // Handle value_dispatched text strings vs integers cleanly during aggregation
         const totalDispatched = data.reduce((sum, row) => {
-            const num = parseFloat(row.value_dispatched);
-            return sum + (isNaN(num) ? 0 : num);
+            const val = parseFloat(row.value_dispatched);
+            return sum + (isNaN(val) ? 0 : val);
         }, 0);
 
         return {
