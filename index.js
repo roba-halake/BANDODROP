@@ -101,7 +101,7 @@ app.post('/api/ussd', async (req, res) => {
  * ============================================================================
  * @route        POST /api/pay
  * @description Backup endpoint / manual API driver to trigger STK pushes directly.
- *               Formats the input number to international standard (2547XXXXXXXX).
+ *              Formats the input number to international standard (2547XXXXXXXX).
  * ============================================================================
  */
 app.post('/api/pay', async (req, res) => {
@@ -146,23 +146,23 @@ app.post('/api/pay', async (req, res) => {
  * ============================================================================
  * @route        POST /api/mpesa-callback
  * @description Production payment webhook listener for IntaSend payment gateway.
- *               Acts as an autonomous financial loop dispatcher.
+ *              Acts as an autonomous financial loop dispatcher.
  * ============================================================================
  */
 app.post('/api/mpesa-callback', async (req, res) => {
     try {
         const { account, net_amount, state, challenge, invoice_id, api_ref } = req.body;
 
-        // 1. Handle IntaSend handshake handshake challenge check
-        if (challenge) {
-            console.log("🔒 [WEBHOOK HANDSHAKE] Challenge verification signature processed cleanly.");
-            return res.status(200).json({ challenge });
-        }
-
-        // 2. Intercept security profile overrides
-        if (process.env.INTASEND_CHALLENGE && challenge !== process.env.INTASEND_CHALLENGE) {
+        // 1. Intercept security profile overrides / unauthorized origins
+        if (process.env.INTASEND_CHALLENGE && challenge && challenge !== process.env.INTASEND_CHALLENGE) {
             console.warn(`🚨 [SECURITY ALERT] Unauthorized challenge mismatch intercepted.`);
             return res.status(401).json({ status: "error", message: "Unauthorized webhook origin" });
+        }
+
+        // 2. Handle IntaSend setup verification ping ONLY if no transaction state is attached
+        if (challenge && !state) {
+            console.log("🔒 [WEBHOOK HANDSHAKE] Challenge verification signature processed cleanly.");
+            return res.status(200).json({ challenge });
         }
 
         console.log(`🔔 Payment Callback Alert! Invoice: ${invoice_id || 'N/A'} | Status: ${state} | Ref: ${api_ref}`);
