@@ -262,6 +262,30 @@ app.post('/api/mpesa-callback', async (req, res) => {
 
 /**
  * ============================================================================
+ * @route        GET /api/admin/metrics
+ * @description  RESTful JSON API endpoint to fetch system metrics dynamically.
+ * ============================================================================
+ */
+app.get('/api/admin/metrics', async (req, res) => {
+    try {
+        const metrics = await getAdminMetrics();
+        return res.status(200).json({
+            status: "success",
+            timestamp: new Date().toISOString(),
+            data: metrics
+        });
+    } catch (err) {
+        console.error("❌ [ADMIN METRICS ERROR]:", err.message);
+        return res.status(500).json({
+            status: "error",
+            message: "Failed to fetch cloud ledger metrics.",
+            details: err.message
+        });
+    }
+});
+
+/**
+ * ============================================================================
  * @route        GET /admin/dashboard
  * @description Low-overhead, lightweight embedded micro-analytics portal.
  * ============================================================================
