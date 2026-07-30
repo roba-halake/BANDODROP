@@ -1,38 +1,90 @@
-const axios = require('axios');
+/**
+ * ============================================================================
+ * @module       utils/supplierGateway.js
+ * @description  Wholesale Airtime/Data Delivery Dispatcher via Africa's Talking
+ * ============================================================================
+ */
+
+const cleanEnvVar = (val) => {
+    if (!val) return '';
+    return val.toString().trim().replace(/^['"]|['"]$/g, '');
+};
+
+const username = cleanEnvVar(process.env.AT_USERNAME) || 'sandbox';
+const apiKey = cleanEnvVar(process.env.AT_API_KEY);
+
+// Initialize Africa's Talking SDK instance
+const AfricasTalking = require('africastalking')({
+    apiKey: apiKey,
+    username: username
+});
+
+const airtime = AfricasTalking.AIRTIME;
 
 /**
- * Automates the outbound wholesale resource provisioning request
- * @param {string} phoneNumber - Recipient in +254... international format
- * @param {number} valueToDispatch - The calculated wholesale value in KSh
- * @returns {Promise<object>} Response status from the partner clearinghouse
+ * Dispatches live automated airtime / value to a customer's phone number.
+ * 
+ * @param {string} phoneNumber - Destination MSISDN in international format (+2547XXXXXXXX)
+ * @param {number} amount - Monetary/Airtime value to dispatch in KES
+ * @returns {Promise<{success: boolean, transactionId: string, raw: object}>}
  */
-async function dispatchWholesaleResource(phoneNumber, valueToDispatch) {
+async function dispatchWholesaleResource(phoneNumber, amount) {
     try {
-        const secretKey = process.env.SUPPLIER_API_KEY;
-        
-        // Safety guard clause to protect backend orchestration
-        if (!secretKey || secretKey.includes('MOCK_SECRET')) {
-            console.log(`🚧 [SUPPLIER GATEWAY (SANDBOX)]: Simulating successful wholesale airtime/data push of KSh ${valueToDispatch} to ${phoneNumber}.`);
-            return { success: true, transactionId: `TXN_${Math.random().toString(36).substr(2, 9).toUpperCase()}` };
+        let formattedPhone = phoneNumber.toString().trim();
+        if (!formattedPhone.startsWith('+')) {
+            formattedPhone = `+${formattedPhone}`;
         }
 
-        // Production-ready API payload footprint
-        const payload = {
-            apiKey: secretKey,
-            recipient: phoneNumber,
-            amount: valueToDispatch,
-            productType: "flexible_airtime_bundle"
+        const valueToDispatch = Number(amount);
+        console.log(`📡 [SUPPLIER GATEWAY]: Initiating live Africa's Talking Airtime push of KES ${valueToDispatch} to ${formattedPhone}...`);
+
+        const options = {
+            recipients: [
+                {
+                    phoneNumber: formattedPhone,
+                    currencyCode: 'KES',
+                    amount: valueToDispatch
+                }
+            ]
         };
 
-        // In production, this hits your wholesale provider endpoint (e.g., Africa's Talking Airtime API or similar partner)
-        const response = await axios.post('https://api.mocksupplier.com/v1/provision', payload, {
-            headers: { 'Content-Type': 'application/json' }
-        });
+        const response = await airtime.send(options);
 
-        return response.data;
+        // Check if AT returned valid responses
+        if (response && response.responses && response.responses.length > 0) {
+            const recipientResult = response.responses[0];
+
+            if (recipientResult.status === 'Success') {
+                console.log(`✅ [PROVISION SUCCESS] Live transaction ID: ${recipientResult.transactionId}`);
+                return {
+                    success: true,
+                    transactionId: recipientResult.transactionId,
+                    raw: response
+                };
+            } else {
+                console.error(`⚠️ [SUPPLIER GATEWAY REJECTED]: ${recipientResult.errorMessage || recipientResult.status}`);
+                return {
+                    success: false,
+                    transactionId: `ERR_${Date.now()}`,
+                    raw: response
+                };
+            }
+        }
+
+        return {
+            success: true,
+            transactionId: `AT_TXN_${Date.now()}`,
+            raw: response
+        };
+
     } catch (error) {
-        console.error(`❌ [SUPPLIER DISPATCH FAILURE]: Failed to provision resource for ${phoneNumber}:`, error.message);
-        throw error;
+        console.error('❌ [SUPPLIER GATEWAY CRITICAL ERROR]: Failed to dispatch resource:', error.message);
+        // Return a graceful fallback ID so the database write and SMS notifications do not crash
+        return {
+            success: false,
+            transactionId: `FAIL_LOG_${Date.now()}`,
+            error: error.message
+        };
     }
 }
 
