@@ -12,10 +12,12 @@ require('dotenv').config();
 
 // Initialize the IntaSend Client SDK
 const IntaSend = require('intasend-node');
+const isTestMode = process.env.INTASEND_TEST_MODE === 'true';
+
 const intasend = new IntaSend(
     process.env.INTASEND_PUBLISHABLE_KEY,
     process.env.INTASEND_SECRET_KEY,
-    true // Set to true for Sandbox / Test Mode, or false for Production
+    isTestMode
 );
 
 console.log("----------------------------------------------------------------");

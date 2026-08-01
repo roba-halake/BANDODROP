@@ -88,4 +88,3 @@ async function dispatchWholesaleResource(phoneNumber, amount) {
     }
 }
 
-module.exports = { dispatchWholesaleResource };
