@@ -1,9 +1,11 @@
 /**
  * ============================================================================
- * @module       utils/supplierGateway.js
- * @description  Wholesale Airtime/Data Delivery Dispatcher via Africa's Talking
+ * @module      utils/supplierGateway.js
+ * @description Wholesale Airtime/Data Delivery Dispatcher via Africa's Talking
  * ============================================================================
  */
+
+require('dotenv').config();
 
 const cleanEnvVar = (val) => {
     if (!val) return '';
@@ -13,7 +15,6 @@ const cleanEnvVar = (val) => {
 const username = cleanEnvVar(process.env.AT_USERNAME) || 'sandbox';
 const apiKey = cleanEnvVar(process.env.AT_API_KEY);
 
-// Initialize Africa's Talking SDK instance
 const AfricasTalking = require('africastalking')({
     apiKey: apiKey,
     username: username
@@ -22,21 +23,27 @@ const AfricasTalking = require('africastalking')({
 const airtime = AfricasTalking.AIRTIME;
 
 /**
- * Dispatches live automated airtime / value to a customer's phone number.
+ * Dispatches automated airtime / bundle value to a customer's phone number.
  * 
- * @param {string} phoneNumber - Destination MSISDN in international format (+2547XXXXXXXX)
- * @param {number} amount - Monetary/Airtime value to dispatch in KES
- * @returns {Promise<{success: boolean, transactionId: string, raw: object}>}
+ * @param {string} phoneNumber Destination MSISDN (e.g., 0712345678, 254712345678, or +254712345678)
+ * @param {number} amount Value to dispatch in KES
+ * @returns {Promise<{success: boolean, transactionId: string, raw?: object, error?: string}>}
  */
 async function dispatchWholesaleResource(phoneNumber, amount) {
     try {
-        let formattedPhone = phoneNumber.toString().trim();
-        if (!formattedPhone.startsWith('+')) {
+        let formattedPhone = phoneNumber ? phoneNumber.toString().trim() : '';
+        
+        // Ensure standard +254... E.164 format for Africa's Talking
+        if (formattedPhone.startsWith('0')) {
+            formattedPhone = `+254${formattedPhone.slice(1)}`;
+        } else if (formattedPhone.startsWith('254')) {
+            formattedPhone = `+${formattedPhone}`;
+        } else if (!formattedPhone.startsWith('+')) {
             formattedPhone = `+${formattedPhone}`;
         }
 
         const valueToDispatch = Number(amount);
-        console.log(`📡 [SUPPLIER GATEWAY]: Initiating live Africa's Talking Airtime push of KES ${valueToDispatch} to ${formattedPhone}...`);
+        console.log(`📡 [SUPPLIER GATEWAY]: Initiating Africa's Talking dispatch of KES ${valueToDispatch} to ${formattedPhone}...`);
 
         const options = {
             recipients: [
@@ -50,12 +57,11 @@ async function dispatchWholesaleResource(phoneNumber, amount) {
 
         const response = await airtime.send(options);
 
-        // Check if AT returned valid responses
         if (response && response.responses && response.responses.length > 0) {
             const recipientResult = response.responses[0];
 
             if (recipientResult.status === 'Success') {
-                console.log(`✅ [PROVISION SUCCESS] Live transaction ID: ${recipientResult.transactionId}`);
+                console.log(`✅ [PROVISION SUCCESS] Transaction ID: ${recipientResult.transactionId}`);
                 return {
                     success: true,
                     transactionId: recipientResult.transactionId,
@@ -66,6 +72,7 @@ async function dispatchWholesaleResource(phoneNumber, amount) {
                 return {
                     success: false,
                     transactionId: `ERR_${Date.now()}`,
+                    error: recipientResult.errorMessage || recipientResult.status,
                     raw: response
                 };
             }
@@ -79,7 +86,6 @@ async function dispatchWholesaleResource(phoneNumber, amount) {
 
     } catch (error) {
         console.error('❌ [SUPPLIER GATEWAY CRITICAL ERROR]: Failed to dispatch resource:', error.message);
-        // Return a graceful fallback ID so the database write and SMS notifications do not crash
         return {
             success: false,
             transactionId: `FAIL_LOG_${Date.now()}`,
@@ -88,3 +94,4 @@ async function dispatchWholesaleResource(phoneNumber, amount) {
     }
 }
 
+module.exports = { dispatchWholesaleResource };
